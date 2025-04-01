@@ -16,6 +16,9 @@ on:
       from:
         description: The email address of a valid user associated with the account making the request.
         required: true
+      service:
+        required: true
+        type: string
       port_context:
         required: true
         description: includes blueprint, run ID, and entity identifier from Port.
