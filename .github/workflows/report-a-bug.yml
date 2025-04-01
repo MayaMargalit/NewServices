@@ -3,6 +3,9 @@ name: Report a bug in jira
 on:
   workflow_dispatch:
     inputs:
+      project:
+        required: true
+        type: string
       description:
         required: true
         type: string
