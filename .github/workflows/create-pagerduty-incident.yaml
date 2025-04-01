@@ -36,5 +36,5 @@ jobs:
           extraDetails: "${{ inputs.extra_details }}"
           urgency: "${{ inputs.urgency }}"
           actorEmail: "${{ inputs.from }}"
-          service: "${{fromJson(inputs.port_context).entity}}"
+          service: "${{ inputs.service }}"
           blueprintIdentifier: 'pagerdutyIncident'
