@@ -15,6 +15,10 @@ on:
         required: true
         description: Includes the action's run id
         type: string
+      sonar_secret:             
+        required: true
+        description: Sonar token (not masked; prefer secrets)
+        type: string
 
 jobs:
   scaffold-service:
@@ -70,7 +74,7 @@ jobs:
 
       - name: Provision repo in SonarQube Cloud
         env:
-          SONAR_TOKEN: ${{ secrets._SONARQUBE_SONAR_API_TOKEN }}
+          SONAR_TOKEN: ${{ inputs.sonar_secret }}
           SONAR_ORG: mayamargalit            # <-- put your org key here
           GITHUB_ORG: ${{ env.ORG_NAME }}
           REPO_NAME:  ${{ inputs.service_name }}
