@@ -106,4 +106,4 @@ jobs:
           baseUrl: https://api.getport.io
           operation: PATCH_RUN
           runId: ${{ env.PORT_RUN_ID }}
-          logMessage: "Finished scaffolding of service and repository: ${{ inputs.service_name }}"
+          logMessage: "Finished scaffolding of service and repository: ${{ inputs.service_name }} and connecting to Sonar"
