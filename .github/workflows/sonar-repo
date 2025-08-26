@@ -1,0 +1,152 @@
+name: Scaffold a new service connected to sonar
+
+on:
+  workflow_dispatch:
+    inputs:
+      service_name:
+        required: true
+        description: The name of the new service
+        type: string
+      description:
+        required: false
+        description: Description of the service
+        type: string
+      port_context:
+        required: true
+        description: Includes the action's run id
+        type: string
+      sonar_secret:             
+        required: true
+        description: Sonar token (not masked; prefer secrets)
+        type: string
+
+jobs:
+  scaffold-service:
+    runs-on: ubuntu-latest
+    env:
+      ORG_NAME: MayaMargalit
+      PORT_RUN_ID: ${{ fromJson(inputs.port_context).runId }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Create a log message
+        uses: port-labs/port-github-action@v1
+        with:
+          clientId: ${{ secrets.PORT_CLIENT_ID }}
+          clientSecret: ${{ secrets.PORT_CLIENT_SECRET }}
+          baseUrl: https://api.getport.io
+          operation: PATCH_RUN
+          runId: ${{ env.PORT_RUN_ID }}
+          logMessage: "Starting scaffolding of service and repository: ${{ inputs.service_name }}"
+
+      - name: Create GitHub Repository
+        uses: port-labs/cookiecutter-gha@v1.1.1
+        with:
+          portClientId: ${{ secrets.PORT_CLIENT_ID }}
+          portClientSecret: ${{ secrets.PORT_CLIENT_SECRET }}
+          token: ${{ secrets.ORG_ADMIN_TOKEN }}
+          portRunId: ${{ fromJson(inputs.port_context).runId }}
+          repositoryName: ${{ inputs.service_name }}
+          portUserInputs: '{"cookiecutter_app_name": "${{ inputs.service_name }}" }'
+          cookiecutterTemplate: https://github.com/lacion/cookiecutter-golang
+          blueprintIdentifier: "githubRepository"
+          organizationName: ${{ env.ORG_NAME }}
+          createPortEntity: false
+      
+      - name: Get new repo numeric ID (GitHub)
+        id: repo_id
+        env:
+          GH_TOKEN: ${{ secrets.ORG_ADMIN_TOKEN }}  # must have repo read on the org
+        run: |
+          set -euo pipefail
+          # Query GitHub REST API for the repo we just created
+          data=$(curl -sS -H "Authorization: token $GH_TOKEN" \
+            "https://api.github.com/repos/${{ env.ORG_NAME }}/${{ inputs.service_name }}")
+          # Extract numeric ID
+          id=$(printf '%s' "$data" | jq -r '.id')
+          if [[ -z "$id" || "$id" == "null" ]]; then
+            echo "Could not resolve repository id"
+            echo "$data"
+            exit 1
+          fi
+          echo "id=$id" >> "$GITHUB_OUTPUT"
+
+      - name: Provision repo in SonarQube Cloud
+        env:
+          SONAR_TOKEN: ${{ inputs.sonar_secret }}
+          SONAR_ORG: mayamargalit            # <-- put your org key here
+          GITHUB_ORG: ${{ env.ORG_NAME }}
+          REPO_NAME:  ${{ inputs.service_name }}
+          REPO_ID:    ${{ steps.repo_id.outputs.id }}
+        run: |
+          set -euo pipefail
+          echo "::add-mask::$SONAR_TOKEN"
+
+          # Sonar expects form-encoded params; send them as query params to keep the body JSON-compatible if needed
+          URL="https://sonarcloud.io/api/alm_integration/provision_projects"
+          Q="organization=$SONAR_ORG&installationKeys=${GITHUB_ORG}/${REPO_NAME}|${REPO_ID}"
+
+          # POST with empty JSON body + Bearer auth (Sonar accepts params in the query string)
+          http_code=$(curl -sS -o sonar_response.json -w "%{http_code}" \
+            -X POST "$URL?$Q" \
+            -H "Authorization: Bearer $SONAR_TOKEN" \
+            -H "Content-Type: application/json" \
+            --data '{}')
+
+          echo "HTTP $http_code"
+          cat sonar_response.json
+          [[ "$http_code" =~ ^2..$ ]] || exit 1
+
+      - name: Analyze repo in SonarQube Cloud
+        env:
+          SONAR_TOKEN: ${{ inputs.sonar_secret }}
+          SONAR_ORG: mayamargalit
+          GITHUB_ORG: ${{ env.ORG_NAME }}
+          REPO_NAME:  ${{ inputs.service_name }}
+          REPO_ID:    ${{ steps.repo_id.outputs.id }}
+        run: |
+          set -euo pipefail
+          echo "::add-mask::$SONAR_TOKEN"
+      
+          # 1) (Optional but recommended) Provision project so it exists & is linked
+          PROVISION_URL="https://sonarcloud.io/api/alm_integration/provision_projects"
+          PROVISION_QS="organization=${SONAR_ORG}&installationKeys=${GITHUB_ORG}/${REPO_NAME}|${REPO_ID}"
+      
+          prov_code=$(curl -sS -o provision_response.json -w "%{http_code}" \
+            -X POST "${PROVISION_URL}?${PROVISION_QS}" \
+            -H "Authorization: Bearer ${SONAR_TOKEN}" \
+            -H "Content-Type: application/json" \
+            --data '{}')
+          echo "Provision HTTP ${prov_code}"
+          cat provision_response.json
+          [[ "${prov_code}" =~ ^2..$ ]] || exit 1
+      
+          # 2) Trigger autoscan eligibility check + auto-enable (internal/undocumented)
+          PROJECT_KEY="${GITHUB_ORG}_${REPO_NAME}"
+          AUTOSCAN_URL="https://sonarcloud.io/api/autoscan/eligibility"
+          AUTOSCAN_QS="autoEnable=true&ignoreCache=false&projectKey=${PROJECT_KEY}"
+      
+          auto_code=$(curl -sS -o autoscan_response.json -w "%{http_code}" \
+            -X POST "${AUTOSCAN_URL}?${AUTOSCAN_QS}" \
+            -H "Authorization: Bearer ${SONAR_TOKEN}" \
+            -H "Content-Type: application/x-www-form-urlencoded" \
+            --data "")
+          echo "Autoscan HTTP ${auto_code}"
+          cat autoscan_response.json
+          [[ "${auto_code}" =~ ^2..$ ]] || exit 1
+      
+          # 3) (Optional) Verify analyses exist
+          curl -sS -u "${SONAR_TOKEN}:" \
+            "https://sonarcloud.io/api/project_analyses/search?project=${PROJECT_KEY}" | tee analyses.json
+
+            
+      - name: Create a log message
+        uses: port-labs/port-github-action@v1
+        with:
+          clientId: ${{ secrets.PORT_CLIENT_ID }}
+          clientSecret: ${{ secrets.PORT_CLIENT_SECRET }}
+          baseUrl: https://api.getport.io
+          operation: PATCH_RUN
+          runId: ${{ env.PORT_RUN_ID }}
+          logMessage: "Finished scaffolding of service and repository: ${{ inputs.service_name }} and connecting to Sonar"
